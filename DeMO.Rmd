@@ -1,0 +1,371 @@
+---
+title: 'Multiple flow FeNO in population research: R code methods demo'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+The following demo file provides example R code to implement six methods for research involving multiple flow exhaled nitric oxide (FeNO) measurements in a study population, where the goal is to relate estimated NO parameters to factors of interest (i.e., covariate(s) X).
+
+## 0. Preliminaries: set up your R session
+
+IMPORTANT! Install JAGS, if not already installed, follow instructions at: https://mcmc-jags.sourceforge.io/
+
+Load the following required packages, installing first if not already available.
+To use the R2jags package, JAGS must be pre-installed.
+
+```{r presetup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+```
+
+```{r setup, message=FALSE,warning=FALSE}
+# set working directory
+setwd("K:/paper/newpackage/PopFeNO")
+# load required packages
+require(MASS)
+require(lme4)
+require(nlme)
+require(reshape2)
+require(R2jags)
+
+```
+
+<br>
+
+
+## 1. Data simulation 
+
+First, set a random seed for your work.
+```{r seed}
+set.seed(2022)
+```
+
+Simulate data from a cross-sectional study with multiple flow FeNO and a single standard normal covariate X using the function DataGeneratorCS() in DataG.R, which outputs a simulated dataset for Ndat participants, with data for each participant on mean flow and FeNO for all maneuvers as well as that participant's value of X.
+
+
+```{r datasim}
+# Simulate a multiple flow FeNO dataset in a study population
+source("DataG.R")       # code to generate multiple flow FeNO datasets
+flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2))
+truebeta=c(0.1,0.1,0.1)
+out <- DataGeneratorCS(Ndat=500,           # number of study participants
+                      alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, 
+                                           # when X=0, in this order: CA, logCaw, logDaw
+                      Xfn=function(n){rnorm(n,0,1)}, # function to generate participant-level covariate X 
+                                                     # as function of number of study participants
+                      beta=truebeta, # vector of regression coefficients relating X to NO parameters, 
+                                           # in this order: CA, logCaw, logDaw
+                      Flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2)), # vector of flow rates in 
+                                                                         # multiple flow FeNO protocol
+                      SD=0.1,              #SD of the error
+                      sdalphaCa            = 0.45, # population SD of CA
+                      sdalphalogCaw        = 0.65, # population SD of logCaw
+                      sdalphalogDaw        = 0.55, # population SD of logDaw
+                      coralphalogCawCa     = 0.66, # correlation of NO parameters: logCaw, CA
+                      coralphalogCawlogDaw = -0.35,# correlation of NO parameters: logCaw, logDaw
+                      coralphalogDawCa     = -0.38 # correlation of NO parameters: logDaw, CA
+                     )
+# output is two versions of the same dataset, plus dataset only including X and id
+# one dataset for use in Bayesian methods via JAGS (datJAGS)
+# one dataset for all other methods (dat)
+dat     <- out$dat
+datJAGS <- out$datJAGS
+datX    <- out$datX 
+```
+
+The dat dataset is in the usual 'long' data format:
+```{r dataview}
+dat[1:10,]
+```
+
+## 2. Estimate NO parameter associations with X
+
+#### 2.1 TS_NLS: Two-stage nonlinear least squares
+
+1: NLS_StageI: Estimated NO paramteres ordered by id, exist NAs
+2: NLS_StageIX: Combine NO paramters and covariate X by id
+3: Fit individual grouped linear regression models for each NO parameters
+```{r tsnls, warning=FALSE, message=FALSE}
+source("TS_NLS.R")
+
+# Stage I 
+NLS_StageI<-TS_NLS_StageI(dat)
+
+# create dataset including both Stage I estimates and X
+NLS_StageIX <- merge(NLS_StageI,datX,by="id")
+
+# Stage II -  edit to include any additional Stage II covariates (e.g., confounder adjustments)
+TS_NLS_Ca     <-lme(Ca ~ X,     random=~1|id, data = NLS_StageIX, na.action = na.omit)
+TS_NLS_logCaw <-lme(logCaw ~ X, random=~1|id, data = NLS_StageIX, na.action = na.omit)
+TS_NLS_logDaw <-lme(logDaw ~ X, random=~1|id, data = NLS_StageIX, na.action = na.omit)
+
+```
+
+Interpretation for CANA:
+
+The population mean CANO is `r intervals(TS_NLS_Ca,which="fixed")[[1]][1,2]` (95% CI: `r intervals(TS_NLS_Ca,which="fixed")[[1]][1,1]`,`r  intervals(TS_NLS_Ca,which="fixed")[[1]][1,3]`). 
+For 1 unit increase in covariate X, CANO increases `r  intervals(TS_NLS_Ca,which="fixed")[[1]][2,2]`, (95% CI: ` r intervals(TS_NLS_Ca,which="fixed")[[1]][2,1]`, `r intervals(TS_NLS_Ca,which="fixed")[[1]][2,3]`).
+
+#### 2.2 TS_HMA: Two-stage Högman & Merilänen Algorithm 
+```{r tshma, warning=FALSE, message=FALSE}
+source("TS_HMA.R")
+
+# Stage I, specify target flow rates for  HMA (low, medium, high)
+HMA_StageI  <- TS_HMA_StageI(dat, flowLMH=c(30,100,300))
+
+# create dataset including both Stage I estimates and X
+HMA_StageIX <- merge(HMA_StageI,datX,by="id")
+
+# Stage II -  edit to include any additional Stage II covariates (e.g., confounder adjustments)
+TS_HMA_Ca      <-lme(Ca ~ X,     random=~1|id,data = HMA_StageIX, na.action = na.omit)
+TS_HMA_logCaw  <-lme(logCaw ~ X, random=~1|id,data = HMA_StageIX, na.action = na.omit)
+TS_HMA_logDaw  <-lme(logDaw ~ X, random=~1|id,data = HMA_StageIX, na.action = na.omit)
+
+```
+
+#### 2.3 TS_NLME: Two-stage nonlinear mixed effects model
+```{r tsnlme, warning=FALSE, message=FALSE, results='hide', cache=TRUE}
+source("TS_NLME.R")
+#Stage I
+TSNLME_StageIout <- TS_NLME_StageI(dat,tol1=0.1,tol2=0.01,outputFit=TRUE)# include X for later unified version
+TSNLME_StageI    <- TSNLME_StageIout$ests
+TSNLME_StageIfit <- TSNLME_StageIout$fit  # save fit to speed up U_NLME
+
+# create dataset including both Stage I estimates and X
+TSNLME_StageIX <- merge(TSNLME_StageI,datX,by="id")
+
+# Stage II -  edit to include any additional Stage II covariates (e.g., confounder adjustments)
+TS_NLME_Ca     <-lme(Ca ~ X,     random=~1|id, data = TSNLME_StageIX, na.action = na.omit)
+TS_NLME_logCaw <-lme(logCaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action = na.omit)
+TS_NLME_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action = na.omit)
+```
+
+
+#### 2.4 UNLME: Unified nonlinear mixed effects model
+```{r unlme, message=FALSE, results='hide', cache=TRUE,warning=FALSE}
+
+# The function is for single X. If you want to fit with multiple X, just modify the "fixed" and start statement of the function
+source("U_NLME.R")
+# direct approach
+U_NLMEout<-U_NLME_direct(dat,datX,tol=0.1)
+# update approach
+U_NLMEout_u<-U_NLME_update(TSNLME_StageIout,dat,datX,tol=0.1)
+# anova(U_NLMEout,U_NLMEout_u) # compare two approaches
+```
+
+#### 2.5 TS_HB: Two-stage Hierarchical Bayesian method
+
+* Load existing results if exists.
+
+```{r tshb, results='hide', cache=TRUE,message=FALSE}
+source("TS_HB.R")
+set.seed(2022)
+# Stage I
+if(!file.exists("TSHB_cc.Rdata")){
+    TSHB_S1<-TSHB_iter(beta0_prior=c(2,4,3),
+                   rhat=1.1,addon.iter=4000,Max_update=10,
+                   n.final=3000,N.iterT=3000,N.burnin=2500,N.thinM=1,N.chain=3,
+                   flow=flow,dat=datJAGS,
+                   tracing=c("beta0_Ca","beta0_logCaw","beta0_logDaw"))
+    save(TSHB_S1,file="TSHB_cc.Rdata")
+}else{
+    load("TSHB_cc.Rdata")
+}
+
+TSHB_S1_dat<-data.frame("Ca"=TSHB_S1$summary[grepl("^Ca",rownames(TSHB_S1$summary)),1],
+                    "logCaw"=TSHB_S1$summary[grepl("^logCaw",rownames(TSHB_S1$summary)),1],
+                    "logDaw"=TSHB_S1$summary[grepl("^logDaw",rownames(TSHB_S1$summary)),1]
+                    )
+TSHB_S1_dat$id <- as.numeric(unlist(lapply(rownames(TSHB_S1_dat),function(x) strsplit(strsplit(x,"\\[")[[1]][2],"\\]")[[1]])))
+TSHB_S1_dat    <- TSHB_S1_dat[order(TSHB_S1_dat$id),]
+TSHB_StageIX   <- cbind(TSHB_S1_dat,datX)
+
+# Stage II -  edit to include any additional Stage II covariates (e.g., confounder adjustments)
+TS_HB_Ca     <-lme(Ca ~ X,     random=~1|id, data = TSHB_StageIX, na.action = na.omit)
+TS_HB_logCaw <-lme(logCaw ~ X, random=~1|id, data = TSHB_StageIX, na.action = na.omit)
+TS_HB_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSHB_StageIX, na.action = na.omit)
+
+```
+
+<br>
+
+##### 2.5.ex  Convergence diagnostic for TS_HB via Rhat (See Gelman and Rubin (1992), Brooks and Gelman (1998)])
+
+* Print out the estimation (95% CL) and Rhat (converge if <1.1 )
+
+```{r}
+TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCaw","sdlogDaw","corlogCawCa","corlogCawlogDaw","corlogDawCa",
+                        "sigma_c"),c("2.5%","mean","97.5%","Rhat")]
+
+```
+
+<br>
+
+#### 2.6  U_HB: Unified Hierarchical Bayesian method
+
+* Load existing results if exists. 
+
+```{r uhb, results='hide', cache=TRUE}
+source("U_HB.R")
+set.seed(2022)
+if(!file.exists("UHB_cc.Rdata")){
+    UHB_sim<-UHB_iter(beta0_prior=c(2,4,3),
+                  betaC_prior =c(0.1,0.1,0.1),
+                  rhat=1.1,addon.iter=1000,Max_update=3,n.final=1000,
+                  N.iterT=1500,N.burnin=1000,N.thinM=1,N.chain=3, 
+                  flow=flow,dat=datJAGS,X=datJAGS$X,tracing=c("beta1_Ca","beta1_logCaw","beta1_logDaw"))
+    save(UHB_sim,file="UHB_cc.Rdata")
+}else{
+    load("UHB_cc.Rdata")
+}
+
+```
+
+<br>
+
+##### 2.6.ex  Convergence diagnostic for U_HB via Rhat
+
+* Print out the estimation (95% CL) and Rhat (converge if <1.1 )
+```{r}
+UHB_sim$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw",
+                  "beta1_Ca","beta1_logCaw","beta1_logDaw",
+                  "sdCa","sdlogCaw","sdlogDaw",
+                  "corlogCawCa","corlogCawlogDaw","corlogDawCa",
+                  "sigma_c"),c("2.5%","mean","97.5%","Rhat")]
+
+```
+
+<br>
+
+## 3. Create plot comparing estimated NO parameter associations across 6 methods
+
+* Y axis: 6 methods
+* X axis: coefficient effect size: The values used in simulation were all equaled to 0.1 for CANO, logCawNO and logDawNO. Which means for 1 unit increase in the covariate X, the corresponding NO paramters CANO, logCawNO and logDawNO increase 0.1 unit. The geometric interpretation for CawNO  was that it was (exp(`r truebeta[2]`)-1) times higher for 1 unit increase in the covariate, so was for DawNO
+
+```{r storeresults,echo=FALSE}
+
+# store results from all methods in allResults dataset for easier plotting
+sixMethods <- c("TS_NLS","TS_HMA","TS_NLME","U_NLME","TS_HB","U_HB")
+nModels <- length(sixMethods)
+allResults <- data.frame(method = rep(sixMethods,each=3),
+                         NOparam = rep(c("Ca","logCaw","logDaw"),nModels),
+                         est= rep(NA,3*nModels),
+                         lb = rep(NA,3*nModels),
+                         ub = rep(NA,3*nModels)
+                         )
+
+# extract TS_NLS results
+allResults[allResults$method=="TS_NLS" & allResults$NOparam=="Ca",c("lb","est","ub")]     <- intervals(TS_NLS_Ca,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_NLS" & allResults$NOparam=="logCaw",c("lb","est","ub")] <- intervals(TS_NLS_logCaw,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_NLS" & allResults$NOparam=="logDaw",c("lb","est","ub")] <- intervals(TS_NLS_logDaw,which="fixed")[[1]]["X",]
+# extract TS_HMA results
+allResults[allResults$method=="TS_HMA" & allResults$NOparam=="Ca",c("lb","est","ub")]     <- intervals(TS_HMA_Ca,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_HMA" & allResults$NOparam=="logCaw",c("lb","est","ub")] <- intervals(TS_HMA_logCaw,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_HMA" & allResults$NOparam=="logDaw",c("lb","est","ub")] <- intervals(TS_HMA_logDaw,which="fixed")[[1]]["X",]
+# extract TS_NLME results
+allResults[allResults$method=="TS_NLME" & allResults$NOparam=="Ca",c("lb","est","ub")]     <- intervals(TS_NLME_Ca,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_NLME" & allResults$NOparam=="logCaw",c("lb","est","ub")] <- intervals(TS_NLME_logCaw,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_NLME" & allResults$NOparam=="logDaw",c("lb","est","ub")] <- intervals(TS_NLME_logDaw,which="fixed")[[1]]["X",]
+# extract U_NLME results
+allResults[allResults$method=="U_NLME" & allResults$NOparam=="Ca",c("lb","est","ub")]     <- intervals(U_NLMEout,which = "fixed")[[1]]["CaNO.X",]
+allResults[allResults$method=="U_NLME" & allResults$NOparam=="logCaw",c("lb","est","ub")] <- intervals(U_NLMEout,which = "fixed")[[1]]["logCawNO.X",]
+allResults[allResults$method=="U_NLME" & allResults$NOparam=="logDaw",c("lb","est","ub")] <- intervals(U_NLMEout,which = "fixed")[[1]]["logDawNO.X",]
+# extract TS_HB results
+allResults[allResults$method=="TS_HB" & allResults$NOparam=="Ca",c("lb","est","ub")]     <- intervals(TS_HB_Ca,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_HB" & allResults$NOparam=="logCaw",c("lb","est","ub")] <- intervals(TS_HB_logCaw,which="fixed")[[1]]["X",]
+allResults[allResults$method=="TS_HB" & allResults$NOparam=="logDaw",c("lb","est","ub")] <- intervals(TS_HB_logDaw,which="fixed")[[1]]["X",]
+# extract U_HB results
+allResults[allResults$method=="U_HB" & allResults$NOparam=="Ca",c("lb","est","ub")]     <- UHB_sim$summary[c("beta1_Ca"),c("2.5%","mean","97.5%")]
+allResults[allResults$method=="U_HB" & allResults$NOparam=="logCaw",c("lb","est","ub")] <- UHB_sim$summary[c("beta1_logCaw"),c("2.5%","mean","97.5%")]
+allResults[allResults$method=="U_HB" & allResults$NOparam=="logDaw",c("lb","est","ub")] <- UHB_sim$summary[c("beta1_logDaw"),c("2.5%","mean","97.5%")]
+
+```
+
+
+```{r plotresults, echo=FALSE}
+par(mfrow=c(3,1),mar=c(3,6,2,1), mgp=c(2,.7,0), tck=-.01)
+################################
+## Association of CANO with X ##
+################################
+# global ylims
+mymin <- min(subset(allResults,NOparam=="Ca")$lb,na.rm=TRUE)
+mymax <- max(subset(allResults,NOparam=="Ca")$ub,na.rm=TRUE)
+# plot estimates
+plot(subset(allResults,NOparam=="Ca")$est, nModels:1,
+     pch=16, col="blue", cex.lab=1.3, cex.axis=1.3, cex=1.7,
+     yaxt="n", ylab="", ylim=c(.5,nModels+.5),
+     xlim=range(c(0,mymin,mymax)),
+     xlab="Difference in CANO, ppb, per 1 unit difference in X"
+     )
+# add line at true value
+abline(v=truebeta[1],col="gray") # 
+# add 95% CI
+segments(subset(allResults,NOparam=="Ca")$lb,nModels:1,
+         subset(allResults,NOparam=="Ca")$ub,nModels:1,lwd=2,col="blue")
+# axis labels
+par(las=2)
+axis(2, at=nModels:1, tick=FALSE,
+     labels=sixMethods,cex.axis=1.3)
+par(las=0)
+
+#################################
+## Association of CawNO with X ## requires exponentiation to get on % difference scale
+#################################
+# global ylims
+mymin <- min(subset(allResults,NOparam=="logCaw")$lb,na.rm=TRUE)
+mymax <- max(subset(allResults,NOparam=="logCaw")$ub,na.rm=TRUE)
+# plot estimates
+plot((exp(subset(allResults,NOparam=="logCaw")$est)-1)*100, nModels:1,
+     pch=16, col="blue", cex.lab=1.3, cex.axis=1.3, cex=1.7,
+     yaxt="n", ylab="", ylim=c(.5,nModels+.5),
+     xlim=(exp(range(c(0,mymin,mymax)))-1)*100,
+     xlab="% Difference in CawNO per 1 unit difference in X"
+     )
+# add line at true value
+abline(v=(exp(truebeta[2])-1)*100,col="gray") # 
+# add 95% CI
+segments((exp(subset(allResults,NOparam=="logCaw")$lb)-1)*100,
+         nModels:1,
+         (exp(subset(allResults,NOparam=="logCaw")$ub)-1)*100,
+         nModels:1,
+         lwd=2,col="blue")
+# axis labels
+par(las=2)
+axis(2, at=nModels:1, tick=FALSE,
+     labels=sixMethods,cex.axis=1.3)
+par(las=0)
+
+#################################
+## Association of DawNO with X ## requires exponentiation to get on % difference scale
+#################################
+# global ylims
+mymin <- min(subset(allResults,NOparam=="logDaw")$lb,na.rm=TRUE)
+mymax <- max(subset(allResults,NOparam=="logDaw")$ub,na.rm=TRUE)
+# plot estimates
+plot((exp(subset(allResults,NOparam=="logDaw")$est)-1)*100, nModels:1,
+     pch=16, col="blue", cex.lab=1.3, cex.axis=1.3, cex=1.7,
+     yaxt="n", ylab="", ylim=c(.5,nModels+.5),
+     xlim=(exp(range(c(0,mymin,mymax)))-1)*100,
+     xlab="% Difference in DawNO per 1 unit difference in X"
+     )
+# add line at true value
+abline(v=(exp(truebeta[3])-1)*100,col="gray") # 
+# add 95% CI
+segments((exp(subset(allResults,NOparam=="logDaw")$lb)-1)*100,
+         nModels:1,
+         (exp(subset(allResults,NOparam=="logDaw")$ub)-1)*100,
+         nModels:1,
+         lwd=2,col="blue")
+# axis labels
+par(las=2)
+axis(2, at=nModels:1, tick=FALSE,
+     labels=sixMethods,cex.axis=1.3)
+par(las=0)
+
+
+```
+
+
+
+

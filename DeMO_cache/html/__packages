@@ -1,0 +1,9 @@
+base
+MASS
+Matrix
+lme4
+nlme
+reshape2
+coda
+rjags
+R2jags
