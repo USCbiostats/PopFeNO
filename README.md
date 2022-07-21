@@ -8,6 +8,7 @@ PopFeNO provides organized R functions and walkthrough manual for researchers to
 ### Installation
 
 This package requires installation of JAGS. If not already installed, follow instructions at: https://mcmc-jags.sourceforge.io/
+
 The following R packages were also required for data reformating, model fitting and implement the JAGS in R:
 
 ```{r}
