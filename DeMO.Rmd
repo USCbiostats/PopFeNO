@@ -3,6 +3,7 @@ title: 'Multiple flow FeNO in population research: R code methods demo'
 output:
   pdf_document: default
   html_document: default
+  word_document: default
 ---
 
 The following demo file provides example R code to implement six methods for cross-sectional studies with multiple flow exhaled nitric oxide (FeNO) measurements, where the goal is to relate estimated NO parameters to factors of interest (i.e., covariate(s) X) in the study population.
@@ -15,7 +16,7 @@ Load the following required packages, installing first if not already available.
 To use the R2jags package, JAGS must be pre-installed.
 
 ```{r presetup, include=FALSE, message=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=60),tidy=TRUE)
 rm(list=ls())
 ```
 
@@ -44,7 +45,9 @@ set.seed(2020)
 
 Next, we simulate data from a cross-sectional study with multiple flow FeNO on each partcipant and a single covariate of interest, X, which varies at the participant-level (i.e., it varies across participants, but is constant within participant across FeNO maneuvers).  We have written a function DataGeneratorCS() in DataG.R, which outputs a simulated dataset containing data for each participant on mean flow and FeNO for all FeNO maneuvers as well as that participant's value of X. 
 
-In this example, we generate data for 500 participants with X following a standard normal distribution (though in practice X can have any distribution) and multiple flow FeNO (8 maneuvers per participant, two each at the target flow rates of 30, 50, 100, and 300 ml/s). Participant-level NO parameters (CANO, CawNO and DawNO) are each generated as a linear function of X, except that rather than CawNO or DawNO, we generate logCawNO and logDawNO to better replicate the approximately log normal distribution observed in practice and to avoid negative estimates in later modeling. For example, participant-level CANO_i = 1.5 + 0.1*X_i + epsilon_i where the standard deviation of the random normal error is 0.45. While we could generate each of the three NO parameters seperately for each participant, instead we generate the three NO parameters from a multivariate normal distribution to introduce correlation between NO parameters. Given the NO parameters, FeNO at each maenuvers can then be generated according to the standard two compartment model XXJingying please add formulationXX with random normal error of 0.1.
+In this example, we generate data for 500 participants with X following a standard normal distribution (though in practice X can have any distribution) and multiple flow FeNO (8 maneuvers per participant, two each at the target flow rates of 30, 50, 100, and 300 ml/s). Participant-level NO parameters (CANO, CawNO and DawNO) are each generated as a linear function of X, except that rather than CawNO or DawNO, we generate logCawNO and logDawNO to better replicate the approximately log normal distribution observed in practice and to avoid negative estimates in later modeling. For example, participant-level CANO_i = 1.5 + 0.1*X_i + epsilon_i where the standard deviation of the random normal error is 0.45. While we could generate each of the three NO parameters seperately for each participant, instead we generate the three NO parameters from a multivariate normal distribution to introduce correlation between NO parameters. Given the NO parameters, FeNO at each maenuvers can then be generated according to the standard two compartment model.
+
+$$FeNO = C_{aw} + (C_A-C_{aw}) \times e^{-\frac{D_{aw}}{flow}}$$
 
 
 ```{r datasim}
@@ -55,19 +58,22 @@ truebeta=c(0.1,0.1,0.1)
 out <- DataGeneratorCS(Ndat=1000,           # number of study participants
                       alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, 
                                            # when X=0, in this order: CA, logCaw, logDaw
-                      Xfn=function(n){rnorm(n,0,1)}, # function to generate participant-level covariate X 
-                                                     # as function of number of study participants
-                      beta=truebeta, # vector of regression coefficients relating X to NO parameters, 
-                                           # in this order: CA, logCaw, logDaw
-                      Flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2)), # vector of flow rates in 
-                                                                         # multiple flow FeNO protocol
+                      # function to generate participant-level covariate X 
+                      # as function of number of study participants
+                      Xfn=function(n){rnorm(n,0,1)}, 
+                      # vector of regression coefficients relating X to NO parameters, 
+                      # in this order: CA, logCaw, logDaw
+                      beta=truebeta, 
+                      # vector of flow rates in multiple flow FeNO protocol
+                      Flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2)), 
+                      
                       SD=0.1,              #SD of the error
                       sdalphaCa            = 0.45, # population SD of CA
                       sdalphalogCaw        = 0.65, # population SD of logCaw
                       sdalphalogDaw        = 0.55, # population SD of logDaw
-                      coralphalogCawCa     = 0.66, # correlation of NO parameters: logCaw, CA
-                      coralphalogCawlogDaw = -0.35,# correlation of NO parameters: logCaw, logDaw
-                      coralphalogDawCa     = -0.38 # correlation of NO parameters: logDaw, CA
+                      coralphalogCawCa     = 0.66, # correlation of logCaw, CA
+                      coralphalogCawlogDaw = -0.35,# correlation of logCaw, logDaw
+                      coralphalogDawCa     = -0.38 # correlation of logDaw, CA
                      )
 # output is two versions of the same dataset, plus dataset only including X and id
 # one dataset for use in Bayesian methods via JAGS (datJAGS)
@@ -78,22 +84,26 @@ datX    <- out$datX
 ```
 
 * The resultant dataset is in the usual 'long' data format:
-```{r dataview}
-dat[1:10,]
+```{r dataview,echo=FALSE}
+kable(dat[1:10,])
 ```
 
-* The intercepts and slopes of the linear regression moedls: NOparam ~ X of the simulated data:
-```{r}
+* The intercepts and slopes of the linear regression moedls: NOparam ~ X of the simulated data, used in the plotting section:
+```{r,echo=FALSE}
 estParam<-lm(datJAGS$NOparam~datJAGS$X)$coef
-estParam
+kable(estParam)
 ```
+
 ## 2. Estimate NO parameter associations with X
 
-#### 2.1 TS_NLS: Two-stage nonlinear least squares
+### 2.1 TS_NLS: Two-stage nonlinear least squares
 
 1: NLS_StageI: Estimated NO paramteres ordered by id, exist NAs
+
 2: NLS_StageIX: Combine NO paramters and covariate X by id
+
 3: Fit individual grouped linear regression models for each NO parameters
+
 ```{r tsnls, warning=FALSE, message=FALSE}
 source("TS_NLS.R")
 
@@ -110,15 +120,28 @@ TS_NLS_logDaw <-lme(logDaw ~ X, random=~1|id, data = NLS_StageIX, na.action = na
 
 ```
 
-Interpretation for CANO: 
+**Interpretation for CANO: **
 
 The population mean CANO is `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,2],2)` (95% CI: `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,1],2)`,`r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,3],)`). 
 
-For 1 unit increase in covariate X, CANO increases `r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,2],2)`, (95% CI: ` r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,1],2)`, `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,3],2)`).
+For 1 unit increase in covariate X, CANO increases `r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,2],2)`, (95% CI: `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,1],2)`, `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,3],2)`).
+
+**Interpretation for CawNO and DawNO from their log version: **
+
+The population mean CawNO is `r round(intervals(TS_NLS_logCaw,which="fixed")[[1]][1,2],2)` (95% CI: `r round(intervals(TS_NLS_logCaw,which="fixed")[[1]][1,1],2)`,`r  round(intervals(TS_NLS_logCaw,which="fixed")[[1]][1,3],)`). 
+
+For 1 unit increase in covariate X, CawNO increases `r  round((exp(intervals(TS_NLS_logCaw,which="fixed")[[1]][2,2])-1)*100,2)`%, (95% CI: `r  round((exp(intervals(TS_NLS_logCaw,which="fixed")[[1]][2,1])-1)*100,2)`%, `r  round((exp(intervals(TS_NLS_logCaw,which="fixed")[[1]][2,3])-1)*100,2)`%).
+
+The population mean DawNO is `r round(intervals(TS_NLS_logDaw,which="fixed")[[1]][1,2],2)` (95% CI: `r round(intervals(TS_NLS_logDaw,which="fixed")[[1]][1,1],2)`,`r  round(intervals(TS_NLS_logDaw,which="fixed")[[1]][1,3],)`). 
+
+For 1 unit increase in covariate X, DawNO increases `r  round((exp(intervals(TS_NLS_logDaw,which="fixed")[[1]][2,2])-1)*100,2)`%, (95% CI: `r  round((exp(intervals(TS_NLS_logDaw,which="fixed")[[1]][2,1])-1)*100,2)`%, `r  round((exp(intervals(TS_NLS_logDaw,which="fixed")[[1]][2,3])-1)*100,2)`%).
+
+* These interpretations are similar for following results.
 
 <br>
 
-#### 2.2 TS_HMA: Two-stage Högman & Merilänen Algorithm 
+### 2.2 TS_HMA: Two-stage Högman & Merilänen Algorithm 
+
 ```{r tshma, warning=FALSE, message=FALSE}
 source("TS_HMA.R")
 
@@ -136,7 +159,8 @@ TS_HMA_logDaw  <-lme(logDaw ~ X, random=~1|id,data = HMA_StageIX, na.action = na
 ```
 
 
-#### 2.3 TS_NLME: Two-stage nonlinear mixed effects model
+### 2.3 TS_NLME: Two-stage nonlinear mixed effects model
+
 ```{r tsnlme, warning=FALSE, message=FALSE, results='hide', cache=TRUE}
 if(!file.exists("TSNLME_cc.Rdata")){
   source("TS_NLME.R")
@@ -159,9 +183,10 @@ TS_NLME_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action 
 ```
 
 
-#### 2.4 UNLME: Unified nonlinear mixed effects model
+### 2.4 UNLME: Unified nonlinear mixed effects model
 
 * Notation: There are two ways to fit the unified NLME model. One through direct simulation, the other updates the two-stage version. 
+
 ```{r unlme, message=FALSE, results='hide', cache=TRUE,warning=FALSE}
 
 if(!file.exists("UNLME_cc.Rdata")){
@@ -181,7 +206,7 @@ if(!file.exists("UNLME_cc.Rdata")){
 
 ```
 
-#### 2.5 TS_HB: Two-stage Hierarchical Bayesian method
+### 2.5 TS_HB: Two-stage Hierarchical Bayesian method
 
 * Load existing results if exists.
 
@@ -192,10 +217,13 @@ source("TS_HB.R")
 if(!file.exists("TSHB_cc.Rdata")){
     set.seed(2020)
     TSHB_S1<-TSHB_iter(beta0_prior=c(2,4,3),
-                   rhat=1.1,addon.iter=4000,Max_update=10,
-                   n.final=3000,N.iterT=3000,N.burnin=2500,N.thinM=1,N.chain=3,
-                   flow=flow,dat=datJAGS,
-                   tracing=c("beta0_Ca","beta0_logCaw","beta0_logDaw"))
+             rhat=1.1,addon.iter=6000,Max_update=10,
+             n.final=6000,N.iterT=55000,N.burnin=50000,N.thinM=10,N.chain=3,
+             flow=flow,dat=datJAGS,
+             tracing=c("beta0_Ca","beta0_logCaw","beta0_logDaw",
+                       "sdCa","sdlogCaw","sdlogDaw",
+                       "corlogCawCa","corlogCawlogDaw","corlogDawCa",
+                       "sigma_c"))
     save(TSHB_S1,file="TSHB_cc.Rdata")
 }else{
     load("TSHB_cc.Rdata")
@@ -222,9 +250,9 @@ TS_HB_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSHB_StageIX, na.action = na
 
 * Print out the estimation (95% CL) and Rhat (converge if <1.1 )
 
-```{r}
-TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCaw","sdlogDaw","corlogCawCa","corlogCawlogDaw","corlogDawCa",
-                        "sigma_c"),c("2.5%","mean","97.5%","Rhat")]
+```{r,echo=FALSE}
+kable(TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCaw","sdlogDaw","corlogCawCa","corlogCawlogDaw","corlogDawCa",
+                        "sigma_c"),c("2.5%","mean","97.5%","Rhat")])
 
 ```
 
@@ -240,10 +268,15 @@ source("U_HB.R")
 if(!file.exists("UHB_cc.Rdata")){
     set.seed(2020)
     UHB_sim<-UHB_iter(beta0_prior=c(2,4,3),
-                  betaC_prior =c(0.1,0.1,0.1),
-                  rhat=1.1,addon.iter=1000,Max_update=3,n.final=1000,
-                  N.iterT=1500,N.burnin=1000,N.thinM=1,N.chain=3, 
-                  flow=flow,dat=datJAGS,X=datJAGS$X,tracing=c("beta1_Ca","beta1_logCaw","beta1_logDaw"))
+             betaC_prior =c(0.1,0.1,0.1),
+             rhat=1.1,addon.iter=12000,Max_update=10,n.final=6000,
+             N.iterT=100000,N.burnin=90000,N.thinM=20,N.chain=3, 
+             flow=flow,dat=datJAGS,X=datJAGS$X,
+             tracing=c("beta0_Ca","beta0_logCaw","beta0_logDaw",
+                       "beta1_Ca","beta1_logCaw","beta1_logDaw",
+                       "sdCa","sdlogCaw","sdlogDaw",
+                       "corlogCawCa","corlogCawlogDaw","corlogDawCa",
+                       "sigma_c"))
     save(UHB_sim,file="UHB_cc.Rdata")
 }else{
     load("UHB_cc.Rdata")
@@ -256,12 +289,12 @@ if(!file.exists("UHB_cc.Rdata")){
 ##### 2.6.ex  Convergence diagnostic for U_HB via Rhat
 
 * Print out the estimation (95% CL) and Rhat (converge if <1.1 )
-```{r}
-UHB_sim$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw",
+```{r,echo=FALSE}
+kable(UHB_sim$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw",
                   "beta1_Ca","beta1_logCaw","beta1_logDaw",
                   "sdCa","sdlogCaw","sdlogDaw",
                   "corlogCawCa","corlogCawlogDaw","corlogDawCa",
-                  "sigma_c"),c("2.5%","mean","97.5%","Rhat")]
+                  "sigma_c"),c("2.5%","mean","97.5%","Rhat")])
 
 ```
 
@@ -271,6 +304,7 @@ UHB_sim$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw",
 
 * Y axis: 6 methods
 * X axis: coefficient effect size: The values used in simulation were all equaled to 0.1 for CANO, logCawNO and logDawNO. Which means for 1 unit increase in the covariate X, the corresponding NO paramters CANO, logCawNO and logDawNO increase 0.1 unit. The geometric interpretation for CawNO  was that it was (exp(`r truebeta[2]`)-1) times higher for 1 unit increase in the covariate, so was for DawNO
+* Refernce lines: Black lines indicate the values used in data simulation. Gray lines indicate the values obtained by regression on the simulated NO parameters and Xs.
 
 ```{r storeresults,echo=FALSE}
 
@@ -312,7 +346,7 @@ allResults[allResults$method=="U_HB" & allResults$NOparam=="logDaw",c("lb","est"
 ```
 
 
-```{r plotresults, echo=FALSE}
+```{r plotresults, echo=FALSE,fig.width=10,fig.height=8}
 par(mfrow=c(3,1),mar=c(4,6,3,1), mgp=c(2,.7,0), tck=-.01)
 ################################
 ## Association of CANO with X ##
@@ -355,7 +389,7 @@ plot((exp(subset(allResults,NOparam=="logCaw")$est)-1)*100, nModels:1,
      )
 # add line at true value
 abline(v=(exp(truebeta[2])-1)*100,col="black") # 
-abline(v=(exp(estParam[2,2])-1),col="gray")
+abline(v=(exp(estParam[2,2])-1)*100,col="gray")
 # add 95% CI
 segments((exp(subset(allResults,NOparam=="logCaw")$lb)-1)*100,
          nModels:1,
@@ -383,7 +417,7 @@ plot((exp(subset(allResults,NOparam=="logDaw")$est)-1)*100, nModels:1,
      )
 # add line at true value
 abline(v=(exp(truebeta[3])-1)*100,col="black") #
-abline(v=(exp(estParam[2,3])-1),col="gray")
+abline(v=(exp(estParam[2,3])-1)*100,col="gray")
 # add 95% CI
 segments((exp(subset(allResults,NOparam=="logDaw")$lb)-1)*100,
          nModels:1,
@@ -397,17 +431,4 @@ axis(2, at=nModels:1, tick=FALSE,
 par(las=0)
 
 
-```
-
-
-## 4: Comparison by table:
-
-* Betas:
-
-```{r}
-all2<-rbind(allResults[1:3,3],allResults[4:6,3],allResults[7:9,3],allResults[10:12,3],allResults[13:15,3],allResults[16:18,3])
-colnames(all2)<-c("CaNO","logCaw","logDaw")
-rownames(all2)<-sixMethods
-kable(round(all2,2))
-getwd()
 ```
