@@ -28,6 +28,7 @@ require(lme4)
 require(nlme)
 require(reshape2)
 require(R2jags)
+require(knitr)
 
 ```
 
@@ -38,7 +39,7 @@ require(R2jags)
 
 First, set a random seed for your work.
 ```{r seed}
-set.seed(2022)
+set.seed(2020)
 ```
 
 Next, we simulate data from a cross-sectional study with multiple flow FeNO on each partcipant and a single covariate of interest, X, which varies at the participant-level (i.e., it varies across participants, but is constant within participant across FeNO maneuvers).  We have written a function DataGeneratorCS() in DataG.R, which outputs a simulated dataset containing data for each participant on mean flow and FeNO for all FeNO maneuvers as well as that participant's value of X. 
@@ -51,7 +52,7 @@ In this example, we generate data for 500 participants with X following a standa
 source("DataG.R")       # code to generate multiple flow FeNO datasets
 flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2))
 truebeta=c(0.1,0.1,0.1)
-out <- DataGeneratorCS(Ndat=500,           # number of study participants
+out <- DataGeneratorCS(Ndat=1000,           # number of study participants
                       alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, 
                                            # when X=0, in this order: CA, logCaw, logDaw
                       Xfn=function(n){rnorm(n,0,1)}, # function to generate participant-level covariate X 
@@ -76,11 +77,16 @@ datJAGS <- out$datJAGS
 datX    <- out$datX 
 ```
 
-The resultant dataset is in the usual 'long' data format:
+* The resultant dataset is in the usual 'long' data format:
 ```{r dataview}
 dat[1:10,]
 ```
 
+* The intercepts and slopes of the linear regression moedls: NOparam ~ X of the simulated data:
+```{r}
+estParam<-lm(datJAGS$NOparam~datJAGS$X)$coef
+estParam
+```
 ## 2. Estimate NO parameter associations with X
 
 #### 2.1 TS_NLS: Two-stage nonlinear least squares
@@ -104,10 +110,13 @@ TS_NLS_logDaw <-lme(logDaw ~ X, random=~1|id, data = NLS_StageIX, na.action = na
 
 ```
 
-Interpretation for CANO: XX Jingying, please round these results to 2 decimal places XX
+Interpretation for CANO: 
 
-The population mean CANO is `r intervals(TS_NLS_Ca,which="fixed")[[1]][1,2]` (95% CI: `r intervals(TS_NLS_Ca,which="fixed")[[1]][1,1]`,`r  intervals(TS_NLS_Ca,which="fixed")[[1]][1,3]`). 
-For 1 unit increase in covariate X, CANO increases `r  intervals(TS_NLS_Ca,which="fixed")[[1]][2,2]`, (95% CI: ` r intervals(TS_NLS_Ca,which="fixed")[[1]][2,1]`, `r intervals(TS_NLS_Ca,which="fixed")[[1]][2,3]`).
+The population mean CANO is `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,2],2)` (95% CI: `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,1],2)`,`r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,3],)`). 
+
+For 1 unit increase in covariate X, CANO increases `r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,2],2)`, (95% CI: ` r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,1],2)`, `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,3],2)`).
+
+<br>
 
 #### 2.2 TS_HMA: Two-stage Högman & Merilänen Algorithm 
 ```{r tshma, warning=FALSE, message=FALSE}
@@ -126,18 +135,24 @@ TS_HMA_logDaw  <-lme(logDaw ~ X, random=~1|id,data = HMA_StageIX, na.action = na
 
 ```
 
+
 #### 2.3 TS_NLME: Two-stage nonlinear mixed effects model
 ```{r tsnlme, warning=FALSE, message=FALSE, results='hide', cache=TRUE}
-source("TS_NLME.R")
-#Stage I
-TSNLME_StageIout <- TS_NLME_StageI(dat,tol1=0.1,tol2=0.01,outputFit=TRUE)# include X for later unified version
+if(!file.exists("TSNLME_cc.Rdata")){
+  source("TS_NLME.R")
+  #Stage I
+  TSNLME_StageIout <- TS_NLME_StageI(dat,tol1=0.1,tol2=0.1,outputFit=TRUE)# include X for later unified version
+  save(TSNLME_StageIout,file="TSNLME_cc.Rdata")
+}else{
+  load("TSNLME_cc.Rdata")
+}
 TSNLME_StageI    <- TSNLME_StageIout$ests
 TSNLME_StageIfit <- TSNLME_StageIout$fit  # save fit to speed up U_NLME
 
 # create dataset including both Stage I estimates and X
 TSNLME_StageIX <- merge(TSNLME_StageI,datX,by="id")
 
-# Stage II -  edit to include any additional Stage II covariates (e.g., confounder adjustments)
+  # Stage II -  edit to include any additional Stage II covariates (e.g., confounder adjustments)
 TS_NLME_Ca     <-lme(Ca ~ X,     random=~1|id, data = TSNLME_StageIX, na.action = na.omit)
 TS_NLME_logCaw <-lme(logCaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action = na.omit)
 TS_NLME_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action = na.omit)
@@ -145,15 +160,25 @@ TS_NLME_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action 
 
 
 #### 2.4 UNLME: Unified nonlinear mixed effects model
+
+* Notation: There are two ways to fit the unified NLME model. One through direct simulation, the other updates the two-stage version. 
 ```{r unlme, message=FALSE, results='hide', cache=TRUE,warning=FALSE}
 
-# The function is for single X. If you want to fit with multiple X, just modify the "fixed" and start statement of the function
-source("U_NLME.R")
-# direct approach
-U_NLMEout<-U_NLME_direct(dat,datX,tol=0.1)
-# update approach
-U_NLMEout_u<-U_NLME_update(TSNLME_StageIout,dat,datX,tol=0.1)
-# anova(U_NLMEout,U_NLMEout_u) # compare two approaches
+if(!file.exists("UNLME_cc.Rdata")){
+  set.seed(2020)
+  # The function is for single X. If you want to fit with multiple X, just modify the "fixed" and    start statement of the function
+  source("U_NLME.R")
+  # direct approach
+  U_NLMEout<-U_NLME_direct(dat,datX,tol=0.1)
+  # update approach
+  #U_NLMEout_u<-U_NLME_update(TSNLME_StageIout,dat,datX,tol=0.1)
+  # anova(U_NLMEout,U_NLMEout_u) # compare two approaches
+  save(U_NLMEout,file="UNLME_cc.Rdata")
+}else{
+  load("UNLME_cc.Rdata")
+}
+  
+
 ```
 
 #### 2.5 TS_HB: Two-stage Hierarchical Bayesian method
@@ -162,9 +187,10 @@ U_NLMEout_u<-U_NLME_update(TSNLME_StageIout,dat,datX,tol=0.1)
 
 ```{r tshb, results='hide', cache=TRUE,message=FALSE}
 source("TS_HB.R")
-set.seed(2022)
+
 # Stage I
 if(!file.exists("TSHB_cc.Rdata")){
+    set.seed(2020)
     TSHB_S1<-TSHB_iter(beta0_prior=c(2,4,3),
                    rhat=1.1,addon.iter=4000,Max_update=10,
                    n.final=3000,N.iterT=3000,N.burnin=2500,N.thinM=1,N.chain=3,
@@ -210,8 +236,9 @@ TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCaw","sd
 
 ```{r uhb, results='hide', cache=TRUE}
 source("U_HB.R")
-set.seed(2022)
+
 if(!file.exists("UHB_cc.Rdata")){
+    set.seed(2020)
     UHB_sim<-UHB_iter(beta0_prior=c(2,4,3),
                   betaC_prior =c(0.1,0.1,0.1),
                   rhat=1.1,addon.iter=1000,Max_update=3,n.final=1000,
@@ -286,7 +313,7 @@ allResults[allResults$method=="U_HB" & allResults$NOparam=="logDaw",c("lb","est"
 
 
 ```{r plotresults, echo=FALSE}
-par(mfrow=c(3,1),mar=c(3,6,2,1), mgp=c(2,.7,0), tck=-.01)
+par(mfrow=c(3,1),mar=c(4,6,3,1), mgp=c(2,.7,0), tck=-.01)
 ################################
 ## Association of CANO with X ##
 ################################
@@ -301,7 +328,9 @@ plot(subset(allResults,NOparam=="Ca")$est, nModels:1,
      xlab="Difference in CANO, ppb, per 1 unit difference in X"
      )
 # add line at true value
-abline(v=truebeta[1],col="gray") # 
+abline(v=truebeta[1],col="black")#
+# add line at the estmated value
+abline(v=estParam[2,1],col="gray")
 # add 95% CI
 segments(subset(allResults,NOparam=="Ca")$lb,nModels:1,
          subset(allResults,NOparam=="Ca")$ub,nModels:1,lwd=2,col="blue")
@@ -325,7 +354,8 @@ plot((exp(subset(allResults,NOparam=="logCaw")$est)-1)*100, nModels:1,
      xlab="% Difference in CawNO per 1 unit difference in X"
      )
 # add line at true value
-abline(v=(exp(truebeta[2])-1)*100,col="gray") # 
+abline(v=(exp(truebeta[2])-1)*100,col="black") # 
+abline(v=(exp(estParam[2,2])-1),col="gray")
 # add 95% CI
 segments((exp(subset(allResults,NOparam=="logCaw")$lb)-1)*100,
          nModels:1,
@@ -352,7 +382,8 @@ plot((exp(subset(allResults,NOparam=="logDaw")$est)-1)*100, nModels:1,
      xlab="% Difference in DawNO per 1 unit difference in X"
      )
 # add line at true value
-abline(v=(exp(truebeta[3])-1)*100,col="gray") # 
+abline(v=(exp(truebeta[3])-1)*100,col="black") #
+abline(v=(exp(estParam[2,3])-1),col="gray")
 # add 95% CI
 segments((exp(subset(allResults,NOparam=="logDaw")$lb)-1)*100,
          nModels:1,
@@ -369,5 +400,14 @@ par(las=0)
 ```
 
 
+## 4: Comparison by table:
 
+* Betas:
 
+```{r}
+all2<-rbind(allResults[1:3,3],allResults[4:6,3],allResults[7:9,3],allResults[10:12,3],allResults[13:15,3],allResults[16:18,3])
+colnames(all2)<-c("CaNO","logCaw","logDaw")
+rownames(all2)<-sixMethods
+kable(round(all2,2))
+getwd()
+```

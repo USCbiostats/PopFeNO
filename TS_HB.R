@@ -123,6 +123,7 @@ TSHB_iter<-function(beta0_prior=c(2,4,3),
   # record how much iterations and check points are met
   N_updateT=0
   N_final=0
+  print(fit_TSHB$BUGSoutput$summary[rownames(fit_TSHB$BUGSoutput$summary) %in% tracing,"Rhat" ])
   #---------total iterations: [adaptive phase + short update phase] + [long update phase * N_updateT(+ final phase * (N_final-1))] + [final phase]--------#
   while(N_updateT<Max_update){# we need a maximum iteration to finish the job
     # check point 1
@@ -130,8 +131,10 @@ TSHB_iter<-function(beta0_prior=c(2,4,3),
       fit_TSHB<-update(fit_TSHB,n.iter=n.final)# if Rhat<1.1, go to the final phase to obtain posterior distributions
       # count how many times we entered the final phase
       N_final=N_final+1
+      print(fit_TSHB$BUGSoutput$summary[rownames(fit_TSHB$BUGSoutput$summary) %in% tracing,"Rhat" ])
       # check point 2: if met, finish simulation
       if(max(fit_TSHB$BUGSoutput$summary[rownames(fit_TSHB$BUGSoutput$summary) %in% tracing,"Rhat" ])<rhat){
+        print(fit_TSHB$BUGSoutput$summary[rownames(fit_TSHB$BUGSoutput$summary) %in% tracing,"Rhat" ])
         break
       }
     }# either check point 1 or 2 is not met, repeat update phase
@@ -151,7 +154,7 @@ TSHB_iter<-function(beta0_prior=c(2,4,3),
     timespend=timespend,
     summary=cbind(fit_TSHB$BUGSoutput$summary,"trimmean"=trimmean,quantile1_99),
     Iter_T=N.iterT+N_updateT*addon.iter+n.final*N_final,# total iterations after the main function
-    Iter_track<-c(N.iterT=N.iterT,N_updateT=N_updateT,addon.iter=addon.iter,n.final=n.final,N_final=N_final)# total number of update phases and final phases
+    Iter_track=c(N.iterT=N.iterT,N_updateT=N_updateT,addon.iter=addon.iter,n.final=n.final,N_final=N_final)# total number of update phases and final phases
   )
   return(result)
 }
