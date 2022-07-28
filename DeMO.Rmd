@@ -1,8 +1,8 @@
 ---
 title: 'Multiple flow FeNO in population research: R code methods demo'
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 
 The following demo file provides example R code to implement six methods for research involving multiple flow exhaled nitric oxide (FeNO) measurements in a study population, where the goal is to relate estimated NO parameters to factors of interest (i.e., covariate(s) X).
