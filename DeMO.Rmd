@@ -36,7 +36,7 @@ require(knitr)
 <br>
 
 
-## 1. Data simulation 
+## 1. Data simulation (flow rate for HMA)
 
 First, set a random seed for your work.
 ```{r seed}
@@ -45,7 +45,7 @@ set.seed(2020)
 
 Next, we simulate data from a cross-sectional study with multiple flow FeNO on each partcipant and a single covariate of interest, X, which varies at the participant-level (i.e., it varies across participants, but is constant within participant across FeNO maneuvers).  We have written a function DataGeneratorCS() in DataG.R, which outputs a simulated dataset containing data for each participant on mean flow and FeNO for all FeNO maneuvers as well as that participant's value of X. 
 
-In this example, we generate data for 500 participants with X following a standard normal distribution (though in practice X can have any distribution) and multiple flow FeNO (8 maneuvers per participant, two each at the target flow rates of 30, 50, 100, and 300 ml/s). Participant-level NO parameters (CANO, CawNO and DawNO) are each generated as a linear function of X, except that rather than CawNO or DawNO, we generate logCawNO and logDawNO to better replicate the approximately log normal distribution observed in practice and to avoid negative estimates in later modeling. For example, participant-level CANO_i = 1.5 + 0.1*X_i + epsilon_i where the standard deviation of the random normal error is 0.45. While we could generate each of the three NO parameters seperately for each participant, instead we generate the three NO parameters from a multivariate normal distribution to introduce correlation between NO parameters. Given the NO parameters, FeNO at each maenuvers can then be generated according to the standard two compartment model.
+In this example, we generate data for 500 participants with X (Environmental factor, length=500) following a standard normal distribution (though in practice, X can have any distribution) and multiple flow FeNO (8 maneuvers per participant, two each at the target flow rates of 30, 50, 100, and 300 ml/s). Participant-level NO parameters (CANO, CawNO and DawNO) are each generated as a linear function of X, except that rather than CawNO or DawNO, we generate logCawNO and logDawNO to better replicate the approximately log normal distribution observed in practice and to avoid negative estimates in later modeling. For example, participant-level $CANO_i = 1.5 + 0.1 \times X_i + \epsilon_i$ where the standard deviation of the random normal error $\epsilon_i$ is a normal distributed: $\epsilon \sim \mathcal{N}(0,0.45)$. While we could generate each of the three NO parameters seperately for each participant, instead we generate the three NO parameters from a multivariate normal distribution to introduce correlation between NO parameters. Given the NO parameters, FeNO at each maenuvers can then be generated according to the standard two compartment model.
 
 $$FeNO = C_{aw} + (C_A-C_{aw}) \times e^{-\frac{D_{aw}}{flow}}$$
 
@@ -55,7 +55,7 @@ $$FeNO = C_{aw} + (C_A-C_{aw}) \times e^{-\frac{D_{aw}}{flow}}$$
 source("DataG.R")       # code to generate multiple flow FeNO datasets
 flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2))
 truebeta=c(0.1,0.1,0.1)
-out <- DataGeneratorCS(Ndat=1000,           # number of study participants
+out <- DataGeneratorCS(Ndat=200,           # number of study participants
                       alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, 
                                            # when X=0, in this order: CA, logCaw, logDaw
                       # function to generate participant-level covariate X 
@@ -81,6 +81,24 @@ out <- DataGeneratorCS(Ndat=1000,           # number of study participants
 dat     <- out$dat
 datJAGS <- out$datJAGS
 datX    <- out$datX 
+
+out2<-DataGeneratorCS_UbN(Ndat=10,            # number of study participants
+                          alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, when X=0, in this order: CA, logCaw, logDaw
+                          Xfn=function(n){rnorm(n,0,1)},# function to generate participant-level covariate X as function of number of study participants
+                          beta=c(0.1,0.1,0.1),
+                          flowTarget=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2)),# vector of regression coefficients relating X to each NO parameter, in this order: CA, logCaw, logDaw
+                          Flow=FlowFun(10,0.9), # Must be a Ndat*max length of flow matrix, missing values were 0s
+                          SD=0.1,              #SD of the error
+                          sdalphaCa            = 0.45, # population SD of CA
+                          sdalphalogCaw        = 0.65, # population SD of logCaw
+                          sdalphalogDaw        = 0.55, # population SD of logDaw
+                          coralphalogCawCa     = 0.66, # correlation of NO parameters: logCaw, CA
+                          coralphalogCawlogDaw = -0.35,# correlation of NO parameters: logCaw, logDaw
+                          coralphalogDawCa     = -0.38 # correlation of NO parameters: logDaw, CA
+)
+dat <- out2$dat
+datX<- out2$datX
+
 ```
 
 * The resultant dataset is in the usual 'long' data format:
@@ -90,7 +108,7 @@ kable(dat[1:10,])
 
 * The intercepts and slopes of the linear regression moedls: NOparam ~ X of the simulated data, used in the plotting section:
 ```{r,echo=FALSE}
-estParam<-lm(datJAGS$NOparam~datJAGS$X)$coef
+estParam<-lm(out2$datNOparam~datX[,2])$coef
 kable(estParam)
 ```
 
@@ -142,6 +160,8 @@ For 1 unit increase in covariate X, DawNO increases `r  round((exp(intervals(TS_
 
 ### 2.2 TS_HMA: Two-stage Högman & Merilänen Algorithm 
 
+*add target flow: low, medium, high comments
+
 ```{r tshma, warning=FALSE, message=FALSE}
 source("TS_HMA.R")
 
@@ -163,6 +183,7 @@ TS_HMA_logDaw  <-lme(logDaw ~ X, random=~1|id,data = HMA_StageIX, na.action = na
 
 ```{r tsnlme, warning=FALSE, message=FALSE, results='hide', cache=TRUE}
 if(!file.exists("TSNLME_cc.Rdata")){
+  set.seed(2020)
   source("TS_NLME.R")
   #Stage I
   TSNLME_StageIout <- TS_NLME_StageI(dat,tol1=0.1,tol2=0.1,outputFit=TRUE)# include X for later unified version
@@ -211,23 +232,26 @@ if(!file.exists("UNLME_cc.Rdata")){
 * Load existing results if exists.
 
 ```{r tshb, results='hide', cache=TRUE,message=FALSE}
-source("TS_HB.R")
+
 
 # Stage I
-if(!file.exists("TSHB_cc.Rdata")){
+#if(!file.exists("TSHB_cc.Rdata")){
     set.seed(2020)
-    TSHB_S1<-TSHB_iter(beta0_prior=c(2,4,3),
-             rhat=1.1,addon.iter=6000,Max_update=10,
-             n.final=6000,N.iterT=55000,N.burnin=50000,N.thinM=10,N.chain=3,
-             flow=flow,dat=datJAGS,
+    source("TS_HB.R")
+  
+   
+    TSHB_S1<-TSHB_iter_UB(beta0_prior=c(2,4,3),
+             rhat=1.1,addon.iter=60,Max_update=10,
+             n.final=60,N.iterT=550,N.burnin=500,N.thinM=1,N.chain=3,
+             flow=flow,dat=dat,
              tracing=c("beta0_Ca","beta0_logCaw","beta0_logDaw",
                        "sdCa","sdlogCaw","sdlogDaw",
                        "corlogCawCa","corlogCawlogDaw","corlogDawCa",
                        "sigma_c"))
-    save(TSHB_S1,file="TSHB_cc.Rdata")
-}else{
-    load("TSHB_cc.Rdata")
-}
+    save(TSHB_S1,file="TSHB_cc_ub.Rdata")
+#}else{
+#    load("TSHB_cc.Rdata")
+#}
 
 TSHB_S1_dat<-data.frame("Ca"=TSHB_S1$summary[grepl("^Ca",rownames(TSHB_S1$summary)),1],
                     "logCaw"=TSHB_S1$summary[grepl("^logCaw",rownames(TSHB_S1$summary)),1],
@@ -265,22 +289,22 @@ kable(TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCa
 ```{r uhb, results='hide', cache=TRUE}
 source("U_HB.R")
 
-if(!file.exists("UHB_cc.Rdata")){
+#if(!file.exists("UHB_cc.Rdata")){
     set.seed(2020)
-    UHB_sim<-UHB_iter(beta0_prior=c(2,4,3),
+    UHB_sim<-UHB_iter_UB(beta0_prior=c(2,4,3),
              betaC_prior =c(0.1,0.1,0.1),
-             rhat=1.1,addon.iter=12000,Max_update=10,n.final=6000,
-             N.iterT=100000,N.burnin=90000,N.thinM=20,N.chain=3, 
-             flow=flow,dat=datJAGS,X=datJAGS$X,
+             rhat=1.1,addon.iter=100,Max_update=1,n.final=100,
+             N.iterT=1200,N.burnin=1000,N.thinM=1,N.chain=3, 
+             flow=flow,dat=dat,X=datX[,2],
              tracing=c("beta0_Ca","beta0_logCaw","beta0_logDaw",
                        "beta1_Ca","beta1_logCaw","beta1_logDaw",
                        "sdCa","sdlogCaw","sdlogDaw",
                        "corlogCawCa","corlogCawlogDaw","corlogDawCa",
                        "sigma_c"))
-    save(UHB_sim,file="UHB_cc.Rdata")
-}else{
-    load("UHB_cc.Rdata")
-}
+    save(UHB_sim,file="UHB_cc_ub.Rdata")
+#}else{
+#    load("UHB_cc.Rdata")
+#}
 
 ```
 
