@@ -1,22 +1,22 @@
 ---
 title: 'Multiple flow FeNO in population research: R code methods demo'
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
   word_document: default
 ---
 
-The following demo file provides example R code to implement six methods for cross-sectional studies with multiple flow exhaled nitric oxide (FeNO) measurements, where the goal is to relate estimated NO parameters to factors of interest (i.e., covariate(s) X) in the study population.
+The following demonstration  provides example R codes to implement six methods for cross-sectional studies with multiple flow exhaled nitric oxide (FeNO) measurements, where the goal is to relate estimated NO parameters to factors of interest (i.e., covariate(s) X) in the study population. 
 
 ## 0. Preliminaries: set up your R session
 
-IMPORTANT! Install JAGS, if not already installed, follow instructions at: https://mcmc-jags.sourceforge.io/
+IMPORTANT! To apply out bayesian approaches, please install JAGS, if not already installed, follow instructions at: https://mcmc-jags.sourceforge.io/
 
 Load the following required packages, installing first if not already available.
 To use the R2jags package, JAGS must be pre-installed.
 
 ```{r presetup, include=FALSE, message=FALSE}
-knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=60),tidy=TRUE)
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=60),tidy=TRUE,eval=FALSE)
 rm(list=ls())
 ```
 
@@ -36,26 +36,80 @@ require(knitr)
 <br>
 
 
-## 1. Data simulation (flow rate for HMA)
+## 1. FeNO data preparation
 
-First, set a random seed for your work.
+We use the long format FeNO data for all methods. The long format refers to the data structure with rows for maneuvers and columns for variables, e.g. measured FeNO, flow rates, and environmental factor/s. Our example was based on single factor X, while the models were also available to deal with multiple linear regression models or other more complex models with some modification. We also impute the measured FeNO with natural logarithmic transformation to adapt its increased randomness (ref). Each participant may took different numbers of maneuver at multiple exhale flow rates. There is an addition column, "target flow rates" to help categorizing the flow rates into low, median and high levels for Högman & Merilänen Algorithm (HMA) method. The flow rates were not necessary been exactly the same within categories, since it was not realistic during test. The popular "target flow rates" were 30, 50, 100 and 300ml/s where HMA methods only used 30, 50, and 300 ml/s. Users may input their own collected data or generate it via our simulation function (**DataGeneratorCS**) based on the two compartment (2CM) FeNO function. 
+
+
+$$FeNO = C_{aw} + (C_A-C_{aw}) \times e^{-\frac{D_{aw}}{flow}}$$
+
+Along with the available real world FeNO data, we also provide data simulation functions to mimic the actual data based on the two compartment model. Here we modified the 2CM model to log transform both sides of it and used the logged CawNO and DawNO form. We wrote the distribution function as follows:
+
+
+$$log(FeNO) \sim \mathcal{N} \left(exp(logC_{aw}) + (C_A-exp(logC_{aw}) )\times e^{-\frac{exp(logD_{aw})}{flow}},\sigma^2 \right)$$
+Several parameters were required for simulation FeNO data. We set some of them like the population mean, variances and correlations of NO parameters as default with the values measures from part of CHS (ref) data. Users can update them with their own numbers.
+
+### Parameters required for simulate FeNO data are:
+
+1: Number of Participants: **Ndat**
+
+2: The variance covariance matrix of NO parameters [Ca, log(CawNO), log(DawNO)]: **NOcov**, a 3 by 3 matrix, which should be positive definite. 
+
+3: Flow rates for each maneuver: **flow**, a vector, length equals to total number of observations (maneuver), ordered by the participant id
+
+4: Standard deviation of measurement error: **SDerror**, we defined the measurement error follows normal distribution with mean 0 and standard deviation
+
+5: Environmental factor: **X**, a vector, length equals to total number of participants, ordered by the participant id. 
+
+6: Coefficient: **beta1**, a length 3 vector, the effect sizes for each of the three NO parameters' response to environmental factor **X**
+
+<br>
+
+
+### Data simulation Process
+
+1: set a random seed for your work.
 ```{r seed}
 set.seed(2020)
 ```
 
-Next, we simulate data from a cross-sectional study with multiple flow FeNO on each partcipant and a single covariate of interest, X, which varies at the participant-level (i.e., it varies across participants, but is constant within participant across FeNO maneuvers).  We have written a function DataGeneratorCS() in DataG.R, which outputs a simulated dataset containing data for each participant on mean flow and FeNO for all FeNO maneuvers as well as that participant's value of X. 
+2: Generate NO parameters for each participant
 
-In this example, we generate data for 500 participants with X (Environmental factor, length=500) following a standard normal distribution (though in practice, X can have any distribution) and multiple flow FeNO (8 maneuvers per participant, two each at the target flow rates of 30, 50, 100, and 300 ml/s). Participant-level NO parameters (CANO, CawNO and DawNO) are each generated as a linear function of X, except that rather than CawNO or DawNO, we generate logCawNO and logDawNO to better replicate the approximately log normal distribution observed in practice and to avoid negative estimates in later modeling. For example, participant-level $CANO_i = 1.5 + 0.1 \times X_i + \epsilon_i$ where the standard deviation of the random normal error $\epsilon_i$ is a normal distributed: $\epsilon \sim \mathcal{N}(0,0.45)$. While we could generate each of the three NO parameters seperately for each participant, instead we generate the three NO parameters from a multivariate normal distribution to introduce correlation between NO parameters. Given the NO parameters, FeNO at each maenuvers can then be generated according to the standard two compartment model.
+**Ndat**: 500 participants
 
-$$FeNO = C_{aw} + (C_A-C_{aw}) \times e^{-\frac{D_{aw}}{flow}}$$
+**Nocov**: The covariance matrix of NO parameters were constructed with: 
+```{r,echo=FALSE}
+NOcovTable<-data.frame("SD Ca" = 0.45, "SD logCaw" = 0.65,"SD logDaw"=0.55,"Cor(Ca, logCaw)" = 0.66, "Cor(Ca, logDaw)" = -0.38,"Cov(logCaw, logDaw)" = -0.35)
+knitr::kable(NOcovTable,col.names = c("SD Ca","SD logCaw","SD logDaw", "Cor(Ca, logCaw)", "Cor(Ca, logDaw)", "Cov(logCaw, logDaw)"))
+
+```
 
 
-```{r datasim}
+**Flow rates**: With a dropping/missing rate of 0.1 and random deviation taken the form of standard normal distribution, each participant was assigned a target flow rates of 30, 50, 100, and 300 ml/s
+
+**SDerror**: The standard deviation of measurement error equals to 0.1
+
+**X**: identically independently distributed vector, generated by rnorm(Ndat,0,1)
+
+**beta1**: The covariate coefficients equal to 0.1 for each NO parameter
+
+In this example, we generated data for 500 participants with a single vector X (Environmental factor, length=500), which had  a standard normal distribution (though in practice, X can have any distribution) and multiple flow FeNO (8 maneuvers per participant, two each at the target flow rates of 30, 50, 100, and 300 ml/s). Participant-level NO parameters (CANO, CawNO and DawNO) are generated with linear functions of X, except that rather than CawNO or DawNO, we generate logCawNO and logDawNO to better replicate the approximately log normal distribution observed in practice and to avoid negative estimates in later modeling. For example, participant-level $CANO_i = 1.5 + 0.1 \times X_i + \epsilon_i$ where the standard deviation of the random normal error $\epsilon_i$ is a normal distributed: $\epsilon \sim \mathcal{N}(0,0.45)$. While we could generate each of the three NO parameters separately, we instead generate the three NO parameters from a multivariate normal distribution to introduce correlation between NO parameters. Given the NO parameters, FeNO at each maneuvers can then be generated according to the two compartment model mentioned above. 
+
+3: Allow unbalance and randomness for flow rates
+
+To mimic the real world data, we allows for unbalance and randomness of flow rates in our simulated data by a given probability of dropping/missing of maneuvers and random noises as the deviates from the target flow during test. The final FeNO data could have different numbers of maneuvers for each participant and the flow rates could be slightly different from the target flow rates. 
+
+```{r datasim,eval=FALSE}
 # Simulate a multiple flow FeNO dataset in a study population
+# Users can use their own flow data, with labels of target flows as "low", "medium" and "high"
+# The input flow data should be in matrix form, each row represent a participant.
+# Labels of target flow can be attached at last or been manually added after the data generated.
+# The number of flows for each participant are not necessary equal.
+
 source("DataG.R")       # code to generate multiple flow FeNO datasets
 flow=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2))
 truebeta=c(0.1,0.1,0.1)
-out <- DataGeneratorCS(Ndat=200,           # number of study participants
+out <- DataGeneratorCS(Ndat=100,           # number of study participants
                       alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, 
                                            # when X=0, in this order: CA, logCaw, logDaw
                       # function to generate participant-level covariate X 
@@ -99,22 +153,49 @@ out2<-DataGeneratorCS_UbN(Ndat=10,            # number of study participants
 dat <- out2$dat
 datX<- out2$datX
 
+
+
+DataGeneratorCS(Ndat=10,            # number of study participants
+                          alpha=c(1.5,3.5,2.5),# vector of NO parameter population means, when X=0, in this order: CA, logCaw, logDaw
+                          X = Xfn(Ndat),# function to generate participant-level covariate X as function of number of study participants
+                          beta=c(0.1,0.1,0.1),
+                          flowTarget=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2)),# vector of regression coefficients relating X to each NO parameter, in this order: CA, logCaw, logDaw
+                          Flow=FlowFun(10,0.9), # Must be a Ndat*max length of flow matrix, missing values were 0s
+                          SD=0.1,              #SD of the error
+                          sdalphaCa            = 0.45, # population SD of CA
+                          sdalphalogCaw        = 0.65, # population SD of logCaw
+                          sdalphalogDaw        = 0.55, # population SD of logDaw
+                          coralphalogCawCa     = 0.66, # correlation of NO parameters: logCaw, CA
+                          coralphalogCawlogDaw = -0.35,# correlation of NO parameters: logCaw, logDaw
+                          coralphalogDawCa     = -0.38 # correlation of NO parameters: logDaw, CA
+)
 ```
 
-* The resultant dataset is in the usual 'long' data format:
+3: The resultant dataset is in the usual 'long' data format:
 ```{r dataview,echo=FALSE}
 kable(dat[1:10,])
 ```
 
 * The intercepts and slopes of the linear regression moedls: NOparam ~ X of the simulated data, used in the plotting section:
+
+These regressions were can be used for a more "concise" comparison with the estimated results.
+
 ```{r,echo=FALSE}
 estParam<-lm(out2$datNOparam~datX[,2])$coef
 kable(estParam)
 ```
 
+<br>
+
 ## 2. Estimate NO parameter associations with X
 
+We are interested in discovering the impact of environmental factor to the NO parameters. Those values were usually estimated in "two-stage" approaches which use the estimated NO parameters as the dependent variables. The corresponding methods were "unified" approach, which use the NO parameters as intermediate variables. We presented 4 two-stage methods and 2 unified methods here. 
+
+<br>
+
 ### 2.1 TS_NLS: Two-stage nonlinear least squares
+
+**Functions**
 
 1: NLS_StageI: Estimated NO paramteres ordered by id, exist NAs
 
@@ -138,13 +219,15 @@ TS_NLS_logDaw <-lme(logDaw ~ X, random=~1|id, data = NLS_StageIX, na.action = na
 
 ```
 
-**Interpretation for CANO: **
+**Interpretation Example: **
+
+1: CANO
 
 The population mean CANO is `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,2],2)` (95% CI: `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,1],2)`,`r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][1,3],)`). 
 
 For 1 unit increase in covariate X, CANO increases `r  round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,2],2)`, (95% CI: `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,1],2)`, `r round(intervals(TS_NLS_Ca,which="fixed")[[1]][2,3],2)`).
 
-**Interpretation for CawNO and DawNO from their log version: **
+2. CawNO and DawNO from their log version: 
 
 The population mean CawNO is `r round(intervals(TS_NLS_logCaw,which="fixed")[[1]][1,2],2)` (95% CI: `r round(intervals(TS_NLS_logCaw,which="fixed")[[1]][1,1],2)`,`r  round(intervals(TS_NLS_logCaw,which="fixed")[[1]][1,3],)`). 
 
@@ -154,13 +237,14 @@ The population mean DawNO is `r round(intervals(TS_NLS_logDaw,which="fixed")[[1]
 
 For 1 unit increase in covariate X, DawNO increases `r  round((exp(intervals(TS_NLS_logDaw,which="fixed")[[1]][2,2])-1)*100,2)`%, (95% CI: `r  round((exp(intervals(TS_NLS_logDaw,which="fixed")[[1]][2,1])-1)*100,2)`%, `r  round((exp(intervals(TS_NLS_logDaw,which="fixed")[[1]][2,3])-1)*100,2)`%).
 
-* These interpretations are similar for following results.
 
 <br>
 
 ### 2.2 TS_HMA: Two-stage Högman & Merilänen Algorithm 
 
-*add target flow: low, medium, high comments
+HMA algorithm only uses flow rates in three categories. In our example, we labeled low, median and high for target flow rates 30,100 and 300 ml/s. 
+
+The interpretations of results were the same as those in TS_NLS
 
 ```{r tshma, warning=FALSE, message=FALSE}
 source("TS_HMA.R")
@@ -178,6 +262,7 @@ TS_HMA_logDaw  <-lme(logDaw ~ X, random=~1|id,data = HMA_StageIX, na.action = na
 
 ```
 
+<br>
 
 ### 2.3 TS_NLME: Two-stage nonlinear mixed effects model
 
@@ -206,7 +291,9 @@ TS_NLME_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSNLME_StageIX, na.action 
 
 ### 2.4 UNLME: Unified nonlinear mixed effects model
 
-* Notation: There are two ways to fit the unified NLME model. One through direct simulation, the other updates the two-stage version. 
+**Notation**
+
+There are two different approaches to fit the unified NLME model. The "Direct" approach fit the model with initial values via approximation; the "Update" approach utilize the fitted two-stage version and update it with added regressions between NO parameters and X. 
 
 ```{r unlme, message=FALSE, results='hide', cache=TRUE,warning=FALSE}
 
@@ -229,7 +316,8 @@ if(!file.exists("UNLME_cc.Rdata")){
 
 ### 2.5 TS_HB: Two-stage Hierarchical Bayesian method
 
-* Load existing results if exists.
+The HB methods usually take hours to finish, so here we loaded the already fitted results. TS_HB methods was the alternative version for the U_HB to have a quicker pilot results, especially when the regression models between NO parameters and X become complex. It is also a "fair" comparison with other two stage methods.
+
 
 ```{r tshb, results='hide', cache=TRUE,message=FALSE}
 
@@ -270,9 +358,11 @@ TS_HB_logDaw <-lme(logDaw ~ X, random=~1|id, data = TSHB_StageIX, na.action = na
 
 <br>
 
-##### 2.5.ex  Convergence diagnostic for TS_HB via Rhat (See Gelman and Rubin (1992), Brooks and Gelman (1998)])
+**Convergence diagnostic**
 
-* Print out the estimation (95% CL) and Rhat (converge if <1.1 )
+We used Rhat (See Gelman and Rubin (1992), Brooks and Gelman (1998)]) to assess the convergence of the MCMC simulation mdoel.
+
+Here we printed out the estimations (95% CL) and their Rhats (converge if <1.1 )
 
 ```{r,echo=FALSE}
 kable(TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCaw","sdlogDaw","corlogCawCa","corlogCawlogDaw","corlogDawCa",
@@ -284,7 +374,7 @@ kable(TSHB_S1$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw","sdCa","sdlogCa
 
 #### 2.6  U_HB: Unified Hierarchical Bayesian method
 
-* Load existing results if exists. 
+Here we also loaded the already fitted U_HB results due to the large amount of time for simulation.
 
 ```{r uhb, results='hide', cache=TRUE}
 source("U_HB.R")
@@ -310,9 +400,9 @@ source("U_HB.R")
 
 <br>
 
-##### 2.6.ex  Convergence diagnostic for U_HB via Rhat
+**Convergence diagnostic** 
 
-* Print out the estimation (95% CL) and Rhat (converge if <1.1 )
+We print out the estimation (95% CL) and Rhat (converge if <1.1 )
 ```{r,echo=FALSE}
 kable(UHB_sim$summary[c("beta0_Ca","beta0_logCaw","beta0_logDaw",
                   "beta1_Ca","beta1_logCaw","beta1_logDaw",
