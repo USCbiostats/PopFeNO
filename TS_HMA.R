@@ -109,7 +109,7 @@ TS_HMA_StageI<-function( dat,   # multiple flow dataset in long format
     eM <- avgFeNO[names(avgFlow)==flowLMH[2]]
     eH <- avgFeNO[names(avgFlow)==flowLMH[3]]
     # only run Hogman Algorithm if data on all 3 target flows are available
-    if(any(is.na(c(fL,fM,fH,eL,eM,eH)))){
+    if(any(is.na(c(fL,fM,fH,eL,eM,eH)))| length(c(fL,fM,fH,eL,eM,eH))<6){#if there are missing in the flows
       HogmanResultsi <- c(Ca=NA,Daw=NA,Jaw=NA,Caw=NA,valid=NA)
     }
     else{

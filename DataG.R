@@ -3,24 +3,23 @@ library(MASS) # needed for mvrnorm()
 library(reshape2) # needed for melt()
 
 
-#----------------- Unbalanced, noised flow, FeNo data -------------------#
-# Use given flow or simulated flow, which could be randomly mutated unbalanced and noised
+#----------------- Unbalanced, noised flow, FeNO data -------------------#
+# Use given flow or simulated flow, could be randomly mutated unbalanced and noised
 
 
 
-FlowFun<-function(Ndat,P){
-  flow=matrix((rep(c(30,30,50,50,100,100,300,300),times=Ndat)+rnorm(Ndat*8,0,1))*rbinom(Ndat*8, 1, 0.9),nrow=Ndat,ncol=8,byrow = T)
-  return(flow)
-}
+
 Xfn=function(n){rnorm(n,0,1)}
 
-DataGeneratorCS<-function(Ndat      = 10,            # number of study participants
-                          popmean   = c(1.5,3.5,2.5),# vector of NO parameter population means, when X=0, in this order: CA, logCaw, logDaw
-                          X         = rnorm(Ndat,0,1),# function to generate participant-level covariate X as function of number of study participants
-                          beta      = c(0.1,0.1,0.1),
-                          flowTarget=c(rep(30,2),rep(50,2),rep(100,2),rep(300,2)),# vector of regression coefficients relating X to each NO parameter, in this order: CA, logCaw, logDaw
-                          Flow=FlowFun(10,0.9), # Must be a Ndat*max length of flow matrix, missing values were 0s
-                          SD=0.1,              #SD of the error
+DataGeneratorCS<-function(Ndat,       # number of study participants
+                          popmean,    # vector of NO parameter population means, when X=0, in this order: CA, logCaw, logDaw
+                          X          = NULL,# function to generate participant-level covariate X as function of number of study participants
+                          beta       ,# vector of regression coefficients relating X to each NO parameter, in this order: CA, logCaw, logDaw
+                          flowTarget ,# flowTarget and Flow cannot be both NULL
+                          Flow       = NULL, # Must be a Ndat*max length of flow matrix, missing values were 0s
+                          noise      = 0,
+                          droprate   = 0,
+                          SD                   = 0.1,  #SD of the error
                           sdalphaCa            = 0.45, # population SD of CA
                           sdalphalogCaw        = 0.65, # population SD of logCaw
                           sdalphalogDaw        = 0.55, # population SD of logDaw
@@ -28,16 +27,31 @@ DataGeneratorCS<-function(Ndat      = 10,            # number of study participa
                           coralphalogCawlogDaw = -0.35,# correlation of NO parameters: logCaw, logDaw
                           coralphalogDawCa     = -0.38 # correlation of NO parameters: logDaw, CA
 ){
-  # generate X
-  print(X)
-
+  
+  if(is.null(X)){
+    X <- rnorm(Ndat,0,1)
+  }
   # create variance/covariance matrix for NO parameters based on SD and correlations
   NOcov <- matrix(c(sdalphaCa^2, coralphalogCawCa*sdalphaCa*sdalphalogCaw, coralphalogDawCa*sdalphaCa*sdalphalogDaw,          
                     coralphalogCawCa*sdalphaCa*sdalphalogCaw, sdalphalogCaw^2, coralphalogCawlogDaw*sdalphalogCaw*sdalphalogDaw,
                     coralphalogDawCa*sdalphaCa*sdalphalogDaw, coralphalogCawlogDaw*sdalphalogCaw*sdalphalogDaw, sdalphalogDaw^2),
                   3,3)
-  logeno <- matrix(NA,ncol=length(flowTarget),nrow=Ndat) # create empty 2-D array for log(FeNO), each row for one participant
-  colnames(logeno) <- flowTarget
+  # simulate flow rates
+  FlowFun<-function(Ndat, flowTarget, droprate, sigma){
+    flow=matrix((rep(flowTarget,times=Ndat)+rnorm(Ndat*8,0,sigma))*rbinom(Ndat*8, 1, 1-droprate),nrow=Ndat,ncol=8,byrow = T)
+    return(flow)
+  }
+  if(is.null(Flow)){
+    Flow <- FlowFun(Ndat,flowTarget,droprate,noise)
+  }
+  
+  # construct a matrix to store the simulated feno values (logged)
+  if(!is.null(flowTarget)){
+    logeno <- matrix(NA,ncol=length(flowTarget),nrow=Ndat) # create empty 2-D array for log(FeNO), each row for one participant
+    colnames(logeno) <- flowTarget
+  }else{
+    logeno <- matrix(NA,ncol=dim(Flow)[2],nrow=Ndat) # Use max number of observation as column numbers
+  }
   NOparam <- matrix(NA,ncol=3,nrow=Ndat)           # create empty 2-D array for NO parameters, each row for one participant
   colnames(NOparam) <- c("Ca","logCaw","logDaw")
   
@@ -48,6 +62,7 @@ DataGeneratorCS<-function(Ndat      = 10,            # number of study participa
       logFeNOobsi  <- ifelse(FeNOi>0,log(FeNOi) + rnorm(length(Flow[i,]),0,SD),NA) # calculate log(FeNO) for each measurement using mean FeNO if mean FeNO is non-negative
       if(!any(is.na(logFeNOobsi)) & param[1]>0){break}#satisfy all constrains: Ca[i] is non negative (param[1]) and FeNO[i,j] is non-negative
     }
+    
     logeno[i,]  <- logFeNOobsi # store sampled logFeNO for participant i's multi-flow measurement
     NOparam[i,] <- c(param[1],param[2],param[3]) #store sampled NO parameter for participant i
   }
