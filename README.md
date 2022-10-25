@@ -1,15 +1,15 @@
 # PopFeNO
-Functions, datas and demo file for package PopFeNO (temp)
+This repository stores demonstration files, R code, and simulation results related to the following articles:
 
-This repository stores demo document, R code, simulation results for the package in development temporary named PopFeNO.This package is for the following article:
+Weng J, Molshatzki N, Marjoram P, Gauderman WJ, Gilliland FD, Eckel SP. Hierarchical Bayesian models to estimate covariate effects on airway and alveolar nitric oxide. Scientific Reports. 2021; 11(1):17180. PMID:34433846. PMC8387480.
 
-PopFeNO provides organized R functions and walkthrough manual for researchers to choose their desired model to analyze FeNO data. 
+Weng, J., Molshatzki, N., Marjoram, P., Gauderman, W., Gilliland, F. and Eckel, S.P., 2022. Longitudinal Hierarchical Bayesian models of covariate effects on airway and alveolar nitric oxide. medRxiv.
 
 ### Installation
 
-This package requires installation of JAGS. If not already installed, follow instructions at: https://mcmc-jags.sourceforge.io/
+This code requires installation of JAGS. If not already installed, follow instructions at: https://mcmc-jags.sourceforge.io/
 
-The following R packages were also required for data reformating, model fitting and implement the JAGS in R:
+The following R packages were also required for data reformating, model fitting and implementing JAGS in R:
 
 ```{r}
 require(MASS)
@@ -19,9 +19,9 @@ require(reshape2)
 require(R2jags)
 ```
 
-### Demostration document walk through
+### Demonstration
 
-The demo document presents how to implement six methods for research involving multiple flows exhaled nitric oxide (FeNO) measurements in a study population, where the goal is to relate estimated NO parameters to factors of interest (i.e., covariate(s) X).
+The demo document shows how to implement six methods for research involving multiple flow exhaled nitric oxide (FeNO) measurements in a study population, where the goal is to relate estimated NO parameters to factors of interest (e.g., environmental exposures, disease status) henceforth called covariate(s) X.
 
 In the demo file ("DeMO.pdf"), a simulated FeNO data set was first generated using given parameters (i.e. Population level NO parameters, covariate coefficient, correlation matrix). The NO parameters used here were CANO, log(CawNO), and log(DawNO). We used natural log transformation of the latter two parameters. 
 
@@ -37,7 +37,3 @@ The six methods presented here are four two-stage approaches (Two stage NLS, HMA
 HB methods require hours to achieve a converged results so we also provide previously fitted results in the repository (use random seed to control the repeatablity).
 
 The summary plot re-transformed the log(CawNO) and log(DawNO) for a more meaningful interpretation.
-
-### Application of this package (in future)
-
-We want to present a direct comparison of the popular methods for FeNO data analysis. Researchers can view the performance and decide which to use based on their own data's characteristics.
