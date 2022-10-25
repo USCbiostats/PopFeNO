@@ -3,7 +3,7 @@ This repository stores demonstration files, R code, and simulation results relat
 
 Weng J, Molshatzki N, Marjoram P, Gauderman WJ, Gilliland FD, Eckel SP. Hierarchical Bayesian models to estimate covariate effects on airway and alveolar nitric oxide. Scientific Reports. 2021; 11(1):17180. PMID:34433846. PMC8387480.
 
-Weng, J., Molshatzki, N., Marjoram, P., Gauderman, W., Gilliland, F. and Eckel, S.P., 2022. Longitudinal Hierarchical Bayesian models of covariate effects on airway and alveolar nitric oxide. medRxiv.
+Weng, J., Molshatzki, N., Marjoram, P., Gauderman, W., Gilliland, F. and Eckel, S.P., 2022. Longitudinal Hierarchical Bayesian models of covariate effects on airway and alveolar nitric oxide. medRxiv. https://www.medrxiv.org/content/10.1101/2022.10.12.22281006v1
 
 ### Installation
 
